@@ -4,13 +4,22 @@ const User = require('../models/User');
 const dotenv = require('dotenv');
 
 dotenv.config();
-const secret = process.env.JWT_SECRET || 'supersecretkey';
+const secret = process.env.JWT_SECRET || 'f1n4nc3';
 
 const register = async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, firstName, middleName, lastName, contactNo, email } = req.body;
   try {
+    console.log('req.body :>> ', req.body);
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({ username, password: hashedPassword });
+    const user = await User.create({ 
+      username, 
+      password: hashedPassword,
+      firstName,
+      middleName,
+      lastName,
+      contactNo,
+      email
+    });
     res.status(201).json({ message: 'User created', userId: user.id });
   } catch (error) {
     res.status(500).json({ error: 'Error creating user' });
@@ -24,8 +33,9 @@ const login = async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    console.log('user :>> ', user);
     const token = jwt.sign({ userId: user.id }, secret, { expiresIn: '1h' });
-    res.json({ token });
+    res.json({ token, user });
   } catch (error) {
     res.status(500).json({ error: 'Error logging in' });
   }

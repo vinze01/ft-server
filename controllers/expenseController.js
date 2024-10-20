@@ -1,4 +1,5 @@
 const Expense = require('../models/Expense');
+const { Op } = require('sequelize');
 
 const addExpense = async (req, res) => {
   const { description, amount, category, date } = req.body;
