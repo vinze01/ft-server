@@ -26,3 +26,9 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+
+# compiled output
+/dist
+
+# sequelize config
+/config/config.json
