@@ -1,13 +1,16 @@
 import { Request, Response } from 'express';
 import User from '../models/User';
 import bcrypt from 'bcryptjs';
-import axios from 'axios';
+import { v2 as cloudinary } from 'cloudinary';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const IMGBB_API_KEY = process.env.IMGBB_API_KEY || '';
-const IMGBB_API_URL = 'https://api.imgbb.com/1/upload';
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 export const updateProfile = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -82,9 +85,11 @@ export const updatePassword = async (req: Request, res: Response): Promise<void>
 export const uploadAvatar = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).userId;
+    console.log('uploadAvatar called, req.file:', req.file);
 
-    if (!req.file || !req.file.path) {
-      res.status(400).json({ error: 'No file uploaded or file path missing', file: req.file });
+    if (!req.file || !req.file.buffer) {
+      console.log('No file or buffer');
+      res.status(400).json({ error: 'No file uploaded' });
       return;
     }
 
@@ -94,47 +99,19 @@ export const uploadAvatar = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    const fs = await import('fs');
-    const filePath = req.file.path;
-    
-    if (!fs.existsSync(filePath)) {
-      res.status(400).json({ error: 'File does not exist at path: ' + filePath });
-      return;
-    }
-    
-    const fileBuffer = fs.readFileSync(filePath);
-    
-    if (!fileBuffer) {
-      res.status(400).json({ error: 'Could not read file' });
-      return;
-    }
-    
-    const base64Image = fileBuffer.toString('base64');
-
-    const params = new URLSearchParams();
-    params.append('key', IMGBB_API_KEY);
-    params.append('image', base64Image);
-
-    const response = await axios({
-      method: 'POST',
-      url: IMGBB_API_URL,
-      data: params.toString(),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    const result = await cloudinary.uploader.upload(`data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`, {
+      upload_preset: 'finance-tracker-upload',
+      folder: 'avatars',
+      public_id: `avatar_${userId}`
     });
-    console.log('ImgBB response:', response.data);
+    console.log('Cloudinary response:', result);
 
-    try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
-
-    if (response.data.success) {
-      const imageUrl = response.data.data.url;
-      await user.update({ avatar: imageUrl });
-      res.json({ avatar: imageUrl });
-    } else {
-      res.status(500).json({ error: 'ImgBB error', details: response.data });
-    }
+    const imageUrl = result.secure_url;
+    await user.update({ avatar: imageUrl });
+    res.json({ avatar: imageUrl });
   } catch (error: any) {
     console.error('Upload avatar error:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to upload avatar: ' + (error.response?.data?.error || error.message) });
+    res.status(500).json({ error: 'Failed to upload avatar: ' + (error.message) });
   }
 };
 

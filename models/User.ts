@@ -11,11 +11,13 @@ interface UserAttributes {
   contactNo: number;
   email: string;
   avatar?: string;
+  resetToken?: string;
+  resetTokenExpiry?: Date;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'avatar' | 'middleName'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'avatar' | 'middleName' | 'resetToken' | 'resetTokenExpiry'> {}
 
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
   public id!: number;
@@ -27,6 +29,8 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
   public contactNo!: number;
   public email!: string;
   public avatar?: string;
+  public resetToken?: string;
+  public resetTokenExpiry?: Date;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -74,6 +78,15 @@ User.init(
     avatar: {
       type: DataTypes.STRING(255),
       allowNull: true
+    },
+    resetToken: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    resetTokenExpiry: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reset_token_expiry'
     }
   },
   {

@@ -3,10 +3,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const dbName = process.env.DB_NAME || '';
+const dbUser = process.env.DB_USER || '';
+const dbPassword = process.env.DB_PASSWORD || '';
+
 const sequelize = new Sequelize(
-  process.env.DB_NAME,
-  process.env.DB_USER,
-  process.env.DB_PASSWORD,
+  dbName,
+  dbUser,
+  dbPassword,
   {
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '5432', 10),

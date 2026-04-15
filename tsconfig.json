@@ -13,7 +13,7 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "moduleResolution": "node"
+    "moduleResolution": "node10"
   },
   "include": ["server.ts", "config/**/*", "controllers/**/*", "models/**/*", "routes/**/*", "middleware/**/*"],
   "exclude": ["node_modules", "dist", "migrations"]

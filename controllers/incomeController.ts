@@ -4,34 +4,88 @@ import { IncomeInput } from '../types/finance';
 
 export const addIncome = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { amount, month, type, year, halfMonth } = req.body as IncomeInput;
+    const { amount, months, type, year, halfMonths } = req.body as IncomeInput;
     const userId = (req as any).userId;
 
-    const existingIncome = await Income.findOne({
-      where: {
-        userId,
-        type,
-        ...(type === 'monthly' && { month, year, halfMonth: halfMonth || null }),
-        ...(type === 'yearly' && { year }),
-        ...(type === 'bi-monthly' && { year, halfMonth: halfMonth as HalfMonth })
-      }
-    });
+    const incomeMonths = (months && months.length > 0) ? months.filter((m: string) => m && m.trim()) : [];
+    const incomeHalfMonths: number[] = (halfMonths && halfMonths.length > 0) ? halfMonths.filter((h: number) => h === 1 || h === 2) : [];
 
-    if (existingIncome) {
-      res.status(400).json({ error: 'Income for this period already exists' });
+    if (incomeMonths.length === 0 && type !== 'yearly') {
+      res.status(400).json({ error: 'Please select at least one month' });
       return;
     }
 
-    const income = await Income.create({
-      amount,
-      month: (type === 'monthly' || type === 'bi-monthly') ? month : null,
-      type: type || 'monthly',
-      year,
-      halfMonth: type === 'bi-monthly' ? halfMonth : null,
-      userId
-    });
+    if (type === 'bi-monthly' && incomeHalfMonths.length === 0) {
+      res.status(400).json({ error: 'Please select at least one pay period' });
+      return;
+    }
 
-    res.status(201).json(income);
+    const existingIncomes: Income[] = [];
+
+    if (type === 'yearly') {
+      const existing = await Income.findOne({
+        where: { userId, type, year }
+      });
+      if (existing) existingIncomes.push(existing);
+    } else {
+      for (const month of incomeMonths) {
+        for (const halfMonth of incomeHalfMonths) {
+          const whereClause: any = {
+            userId,
+            type,
+            year,
+            month
+          };
+          
+          if (type === 'bi-monthly') {
+            whereClause.halfMonth = halfMonth;
+          }
+
+          const existing = await Income.findOne({ where: whereClause });
+          if (existing) existingIncomes.push(existing);
+        }
+      }
+    }
+
+    if (existingIncomes.length > 0) {
+      res.status(400).json({ error: 'Income for one or more selected periods already exists' });
+      return;
+    }
+
+    const createdIncomes: Income[] = [];
+
+    if (type === 'yearly') {
+      const income = await Income.create({
+        amount,
+        month: null,
+        type: type || 'monthly',
+        year,
+        halfMonth: null,
+        userId
+      });
+      createdIncomes.push(income);
+    } else {
+      for (const month of incomeMonths) {
+        for (const halfMonth of incomeHalfMonths) {
+          const incomeData: any = {
+            amount,
+            month,
+            type: type || 'monthly',
+            year,
+            userId
+          };
+          
+          if (type === 'bi-monthly') {
+            incomeData.halfMonth = halfMonth;
+          }
+
+          const income = await Income.create(incomeData);
+          createdIncomes.push(income);
+        }
+      }
+    }
+
+    res.status(201).json(createdIncomes);
   } catch (error) {
     console.error('Add income error:', error);
     res.status(500).json({ error: 'Failed to add income' });

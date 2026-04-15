@@ -5,23 +5,16 @@ import { addIncome, getIncomes, getTotalIncome, updateIncome, deleteIncome } fro
 import { addBudget, getBudgets, updateBudget, deleteBudget } from '../controllers/budgetController';
 import { getDashboardSummary } from '../controllers/dashboardController';
 import { updateProfile, updatePassword, uploadAvatar, deleteAccount } from '../controllers/userController';
+import { forgotPassword, resetPassword } from '../controllers/passwordController';
 import multer from 'multer';
 
 const router = Router();
-const upload = multer({ 
-  dest: 'uploads/',
-  storage: multer.diskStorage({
-    destination: function (req, file, cb) {
-      cb(null, 'uploads/');
-    },
-    filename: function (req, file, cb) {
-      cb(null, Date.now() + '-' + Math.random().toString(36).substring(7));
-    }
-  })
-});
+const upload = multer({ storage: multer.memoryStorage() });
 
 router.post('/register', upload.single('avatar'), register);
 router.post('/login', login);
+router.post('/forgot-password', forgotPassword);
+router.post('/reset-password', resetPassword);
 router.get('/me', authenticate, getCurrentUser);
 
 router.put('/users/profile', authenticate, updateProfile);

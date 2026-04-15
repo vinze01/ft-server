@@ -33,9 +33,11 @@ export interface Income {
 
 export interface IncomeInput {
   amount: number;
+  months?: string[];
   month?: string;
   type: IncomeType;
   year: number;
+  halfMonths?: HalfMonth[];
   halfMonth?: HalfMonth;
 }
 
@@ -57,9 +59,11 @@ export interface Budget {
 export interface BudgetInput {
   category: string;
   amount: number;
+  months?: string[];
   month?: string;
   type: BudgetType;
   year: number;
+  halfMonths?: HalfMonth[];
   halfMonth?: HalfMonth;
 }
 
