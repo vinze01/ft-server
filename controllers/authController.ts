@@ -13,6 +13,11 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     const { username, password, firstName, middleName, lastName, contactNo, email } = req.body as UserInput;
     const avatar = req.file ? (req.file as any).filename : undefined;
 
+    if (!username || !password || !firstName || !lastName || !contactNo || !email) {
+      res.status(400).json({ error: 'Missing required fields' });
+      return;
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     
     const user = await User.create({
@@ -27,8 +32,12 @@ export const register = async (req: Request, res: Response): Promise<void> => {
     });
 
     res.status(201).json({ message: 'User created', userId: user.id });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Registration error:', error);
+    if (error?.name === 'SequelizeUniqueConstraintError') {
+      res.status(400).json({ error: 'Username or email already exists' });
+      return;
+    }
     res.status(500).json({ error: 'Error creating user' });
   }
 };

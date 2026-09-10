@@ -116,10 +116,13 @@ export const getIncomes = async (req: Request, res: Response): Promise<void> => 
 export const getTotalIncome = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).userId;
-    const { year } = req.query;
+    let { year } = req.query;
 
-    const where: any = { userId };
-    if (year) where.year = parseInt(year as string);
+    if (!year) {
+      year = new Date().getFullYear().toString();
+    }
+
+    const where: any = { userId, year: parseInt(year as string) };
 
     const incomes = await Income.findAll({ where });
     const totalIncome = incomes.reduce((sum, income) => sum + Number(income.amount), 0);

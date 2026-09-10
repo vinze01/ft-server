@@ -56,11 +56,11 @@ export const getExpenses = async (req: Request, res: Response): Promise<void> =>
 export const getExpensesForMonth = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).userId;
-    const { month } = req.query;
+    let { month } = req.query;
 
     if (!month) {
-      res.status(400).json({ error: 'Month parameter is required' });
-      return;
+      const now = new Date();
+      month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     }
 
     const [year, mon] = (month as string).split('-').map(Number);
