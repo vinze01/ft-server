@@ -13,6 +13,9 @@ interface IncomeAttributes {
   year: number;
   halfMonth: HalfMonth | null;
   userId: number;
+  accountId?: number;
+  note?: string;
+  category?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -27,6 +30,9 @@ class Income extends Model<IncomeAttributes, IncomeCreationAttributes> implement
   public year!: number;
   public halfMonth!: HalfMonth | null;
   public userId!: number;
+  public accountId?: number;
+  public note?: string;
+  public category?: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 
@@ -73,6 +79,19 @@ Income.init(
         model: 'users',
         key: 'id'
       }
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'account_id'
+    },
+    note: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    category: {
+      type: DataTypes.STRING(255),
+      allowNull: true
     }
   },
   {

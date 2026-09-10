@@ -9,6 +9,8 @@ interface ExpenseAttributes {
   category: string;
   date: Date | string;
   userId: number;
+  accountId?: number;
+  note?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -22,6 +24,8 @@ class Expense extends Model<ExpenseAttributes, ExpenseCreationAttributes> implem
   public category!: string;
   public date!: Date | string;
   public userId!: number;
+  public accountId?: number;
+  public note?: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 
@@ -61,6 +65,15 @@ Expense.init(
         model: 'users',
         key: 'id'
       }
+    },
+    accountId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'account_id'
+    },
+    note: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
   },
   {
