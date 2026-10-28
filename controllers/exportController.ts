@@ -81,7 +81,9 @@ class ExportController {
       const errors: string[] = [];
       let imported = 0;
 
-      for (let i = 1; i < parsed.length; i++) {
+      // `parsed` excludes the header row, so iterate from 0 — starting at 1
+      // silently skipped the first data row of every import.
+      for (let i = 0; i < parsed.length; i++) {
         const row = parsed[i];
         try {
           if (row.type === 'income') {
@@ -107,7 +109,8 @@ class ExportController {
             imported++;
           }
         } catch (e: any) {
-          errors.push(`Row ${i + 1}: ${e.message}`);
+          // +2 accounts for the header row and 1-based row numbering
+          errors.push(`Row ${i + 2}: ${e.message}`);
         }
       }
 

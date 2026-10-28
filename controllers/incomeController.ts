@@ -4,7 +4,7 @@ import { IncomeInput } from '../types/finance';
 
 export const addIncome = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { amount, months, type, year, halfMonths } = req.body as IncomeInput;
+    const { amount, months, type, year, halfMonths, accountId, category, note } = req.body as IncomeInput;
     const userId = (req as any).userId;
 
     const incomeMonths = (months && months.length > 0) ? months.filter((m: string) => m && m.trim()) : [];
@@ -22,6 +22,11 @@ export const addIncome = async (req: Request, res: Response): Promise<void> => {
 
     const existingIncomes: Income[] = [];
 
+    // For monthly/yearly rows halfMonth is NULL, so iterate a single pass per
+    // month instead of zipping with the (empty) halfMonths selection —
+    // otherwise nothing is created and the API still returns 201 [].
+    const halfMonthValues: (number | null)[] = type === 'bi-monthly' ? incomeHalfMonths : [null];
+
     if (type === 'yearly') {
       const existing = await Income.findOne({
         where: { userId, type, year }
@@ -29,7 +34,7 @@ export const addIncome = async (req: Request, res: Response): Promise<void> => {
       if (existing) existingIncomes.push(existing);
     } else {
       for (const month of incomeMonths) {
-        for (const halfMonth of incomeHalfMonths) {
+        for (const halfMonth of halfMonthValues) {
           const whereClause: any = {
             userId,
             type,
@@ -61,18 +66,24 @@ export const addIncome = async (req: Request, res: Response): Promise<void> => {
         type: type || 'monthly',
         year,
         halfMonth: null,
-        userId
+        userId,
+        accountId: accountId || null,
+        category: category || null,
+        note: note || null
       });
       createdIncomes.push(income);
     } else {
       for (const month of incomeMonths) {
-        for (const halfMonth of incomeHalfMonths) {
+        for (const halfMonth of halfMonthValues) {
           const incomeData: any = {
             amount,
             month,
             type: type || 'monthly',
             year,
-            userId
+            userId,
+            accountId: accountId || null,
+            category: category || null,
+            note: note || null
           };
           
           if (type === 'bi-monthly') {
@@ -138,7 +149,7 @@ export const updateIncome = async (req: Request, res: Response): Promise<void> =
   try {
     const { id } = req.params;
     const userId = (req as any).userId;
-    const { amount, month, type, year, halfMonth } = req.body as IncomeInput;
+    const { amount, month, type, year, halfMonth, accountId, category, note } = req.body as IncomeInput;
 
     const income = await Income.findOne({
       where: { id: parseInt(id), userId }
@@ -170,7 +181,12 @@ export const updateIncome = async (req: Request, res: Response): Promise<void> =
       month: (type === 'monthly' || type === 'bi-monthly') ? month : null,
       type: type || 'monthly',
       year,
-      halfMonth: type === 'bi-monthly' ? halfMonth : null
+      halfMonth: type === 'bi-monthly' ? halfMonth : null,
+      // Only overwrite the optional detail fields when actually sent, so a
+      // partial PUT (e.g. { amount }) doesn't wipe them to null.
+      ...(accountId !== undefined && { accountId: accountId || null }),
+      ...(category !== undefined && { category: category || null }),
+      ...(note !== undefined && { note: note || null })
     });
     res.json(income);
   } catch (error) {

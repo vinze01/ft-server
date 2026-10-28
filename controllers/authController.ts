@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User';
+import securityController from './securityController';
 import dotenv from 'dotenv';
 import { UserInput, AuthResponse } from '../types/user';
 
@@ -59,7 +60,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    
+
+    // Record the login session so the Settings > Security sessions/devices
+    // list actually has rows to show (createSession swallows its own errors).
+    await securityController.createSession(req, res, user.id, token);
+
     const userData = user.toJSON();
     delete (userData as any).password;
 

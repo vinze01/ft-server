@@ -5,7 +5,7 @@ import { ExpenseInput } from '../types/finance';
 
 export const addExpense = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { description, amount, category, date } = req.body as ExpenseInput;
+    const { description, amount, category, date, accountId, note } = req.body as ExpenseInput;
     const userId = (req as any).userId;
 
     const expense = await Expense.create({
@@ -13,7 +13,9 @@ export const addExpense = async (req: Request, res: Response): Promise<void> => 
       amount,
       category,
       date,
-      userId
+      userId,
+      accountId: accountId || null,
+      note: note || null
     });
 
     res.status(201).json(expense);
@@ -90,7 +92,7 @@ export const updateExpense = async (req: Request, res: Response): Promise<void> 
   try {
     const { id } = req.params;
     const userId = (req as any).userId;
-    const { description, amount, category, date } = req.body as ExpenseInput;
+    const { description, amount, category, date, accountId, note } = req.body as ExpenseInput;
 
     const expense = await Expense.findOne({
       where: { id: parseInt(id), userId }
@@ -105,7 +107,9 @@ export const updateExpense = async (req: Request, res: Response): Promise<void> 
       description,
       amount,
       category,
-      date
+      date,
+      ...(accountId !== undefined && { accountId: accountId || null }),
+      ...(note !== undefined && { note: note || null })
     });
 
     res.json(expense);

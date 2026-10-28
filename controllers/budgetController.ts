@@ -22,6 +22,10 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
 
     const existingBudgets: Budget[] = [];
 
+    // Same as incomes: monthly/yearly rows have halfMonth NULL, so iterate a
+    // single pass per month rather than zipping with the (empty) halfMonths.
+    const halfMonthValues: (number | null)[] = type === 'bi-monthly' ? budgetHalfMonths : [null];
+
     if (type === 'yearly') {
       const existing = await Budget.findOne({
         where: { userId, category, type, year }
@@ -29,7 +33,7 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
       if (existing) existingBudgets.push(existing);
     } else {
       for (const month of budgetMonths) {
-        for (const halfMonth of budgetHalfMonths) {
+        for (const halfMonth of halfMonthValues) {
           const whereClause: any = {
             userId,
             category,
@@ -68,7 +72,7 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
       createdBudgets.push(budget);
     } else {
       for (const month of budgetMonths) {
-        for (const halfMonth of budgetHalfMonths) {
+        for (const halfMonth of halfMonthValues) {
           const budgetData: any = {
             category,
             amount,
