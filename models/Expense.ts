@@ -9,8 +9,8 @@ interface ExpenseAttributes {
   category: string;
   date: Date | string;
   userId: number;
-  accountId?: number;
-  note?: string;
+  accountId?: number | null;
+  note?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -24,8 +24,8 @@ class Expense extends Model<ExpenseAttributes, ExpenseCreationAttributes> implem
   public category!: string;
   public date!: Date | string;
   public userId!: number;
-  public accountId?: number;
-  public note?: string;
+  public accountId?: number | null;
+  public note?: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 

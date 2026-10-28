@@ -87,4 +87,8 @@ AccountTransfer.init(
   }
 );
 
+// Needed by accountController.getTransfers (include: ['fromAccount', 'toAccount'])
+AccountTransfer.belongsTo(Account, { as: 'fromAccount', foreignKey: 'fromAccountId' });
+AccountTransfer.belongsTo(Account, { as: 'toAccount', foreignKey: 'toAccountId' });
+
 export default AccountTransfer;

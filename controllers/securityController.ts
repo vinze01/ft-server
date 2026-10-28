@@ -5,6 +5,7 @@ import speakeasy from 'speakeasy';
 import QRCode from 'qrcode';
 import { User } from '../models';
 import Session from '../models/Session';
+import bcrypt from 'bcryptjs';
 
 const TOKEN_EXPIRY_DAYS = 7;
 
@@ -73,6 +74,12 @@ class SecurityController {
       const user = await User.findByPk((req as any).userId);
       if (!user) {
         return res.status(404).json({ success: false, error: 'User not found' });
+      }
+
+      // Require the current password — a stolen token alone must not be able
+      // to turn off a user's second factor.
+      if (!password || !(await bcrypt.compare(password, user.password))) {
+        return res.status(400).json({ success: false, error: 'Password is incorrect' });
       }
 
       await User.update(
@@ -172,16 +179,21 @@ class SecurityController {
   async changePassword(req: Request, res: Response) {
     try {
       const { currentPassword, newPassword } = req.body;
-      
+
       const user = await User.findByPk((req as any).userId);
       if (!user) {
         return res.status(404).json({ success: false, error: 'User not found' });
       }
 
-      await User.update(
-        { password: newPassword },
-        { where: { id: (req as any).userId } }
-      );
+      // Verify the current password before allowing a change
+      const isMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ success: false, error: 'Current password is incorrect' });
+      }
+
+      // Always store bcrypt hashes, never plaintext
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await user.update({ password: hashedPassword });
 
       return res.json({ success: true, message: 'Password changed successfully' });
     } catch (error: any) {

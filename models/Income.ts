@@ -13,9 +13,9 @@ interface IncomeAttributes {
   year: number;
   halfMonth: HalfMonth | null;
   userId: number;
-  accountId?: number;
-  note?: string;
-  category?: string;
+  accountId?: number | null;
+  note?: string | null;
+  category?: string | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -30,9 +30,9 @@ class Income extends Model<IncomeAttributes, IncomeCreationAttributes> implement
   public year!: number;
   public halfMonth!: HalfMonth | null;
   public userId!: number;
-  public accountId?: number;
-  public note?: string;
-  public category?: string;
+  public accountId?: number | null;
+  public note?: string | null;
+  public category?: string | null;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 

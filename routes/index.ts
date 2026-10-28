@@ -18,21 +18,41 @@ import exportController from '../controllers/exportController';
 import securityController from '../controllers/securityController';
 import notificationController from '../controllers/notificationController';
 import multer from 'multer';
+import { authLimiter } from '../middleware/rateLimiter';
+import { validateIdParam } from '../middleware/validateId';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Auth
-router.post('/register', upload.none(), register);
-router.post('/login', login);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
+// Avatar uploads: images only, capped at 5 MB. The shared `upload` instance
+// above stays unrestricted because the CSV import endpoint needs non-image files.
+const avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(Object.assign(new Error('Only image files are allowed'), { status: 400 }));
+    }
+  }
+});
+
+// Every `:id` route parameter is validated as a positive integer before it
+// reaches any controller (defense-in-depth against malformed/injected input).
+router.param('id', validateIdParam);
+
+// Auth — strict rate limiting on the unauthenticated endpoints
+router.post('/register', authLimiter, upload.none(), register);
+router.post('/login', authLimiter, login);
+router.post('/forgot-password', authLimiter, forgotPassword);
+router.post('/reset-password', authLimiter, resetPassword);
 router.get('/me', authenticate, getCurrentUser);
 
 // User
 router.put('/users/profile', authenticate, updateProfile);
 router.put('/users/password', authenticate, updatePassword);
-router.post('/users/avatar', authenticate, upload.single('avatar'), uploadAvatar);
+router.post('/users/avatar', authenticate, avatarUpload.single('avatar'), uploadAvatar);
 router.delete('/users/account', authenticate, deleteAccount);
 
 // Dashboard
@@ -58,15 +78,16 @@ router.get('/budgets', authenticate, getBudgets);
 router.put('/budgets/:id', authenticate, updateBudget);
 router.delete('/budgets/:id', authenticate, deleteBudget);
 
-// Accounts
+// Accounts — /summary and /transfers MUST be registered before /:id,
+// otherwise they are captured as an id and 404.
 router.get('/accounts', authenticate, accountController.getAll.bind(accountController));
+router.get('/accounts/summary', authenticate, accountController.getSummary.bind(accountController));
+router.get('/accounts/transfers', authenticate, accountController.getTransfers.bind(accountController));
 router.get('/accounts/:id', authenticate, accountController.getOne.bind(accountController));
 router.post('/accounts', authenticate, accountController.create.bind(accountController));
 router.put('/accounts/:id', authenticate, accountController.update.bind(accountController));
 router.delete('/accounts/:id', authenticate, accountController.delete.bind(accountController));
-router.get('/accounts/summary', authenticate, accountController.getSummary.bind(accountController));
 router.post('/accounts/transfer', authenticate, accountController.transfer.bind(accountController));
-router.get('/accounts/transfers', authenticate, accountController.getTransfers.bind(accountController));
 
 // Bills
 router.get('/bills', authenticate, billController.getAll.bind(billController));

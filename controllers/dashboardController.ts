@@ -28,7 +28,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       const endOfMonth = new Date(selectedYear, selectedMonth, 0);
 
       const currentMonthIncomes = await Income.findAll({
-        where: { userId }
+        where: { userId, year: selectedYear, month: months[selectedMonth - 1] }
       });
       totalIncome = currentMonthIncomes.reduce((sum, inc) => sum + Number(inc.amount), 0);
 
@@ -67,7 +67,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         const start = new Date(y, m, 1);
         const end = new Date(y, m + 1, 0);
 
-        const incomes = await Income.findAll({ where: { userId } });
+        const incomes = await Income.findAll({ where: { userId, year: y, month: months[m] } });
         const expenses = await Expense.findAll({
           where: { userId, date: { [Op.between]: [start, end] } }
         });
@@ -83,7 +83,7 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
       const startOfYear = new Date(selectedYear, 0, 1);
       const endOfYear = new Date(selectedYear, 11, 31);
 
-      const yearlyIncomes = await Income.findAll({ where: { userId } });
+      const yearlyIncomes = await Income.findAll({ where: { userId, year: selectedYear } });
       totalIncome = yearlyIncomes.reduce((sum, inc) => sum + Number(inc.amount), 0);
 
       const yearlyExpenses = await Expense.findAll({

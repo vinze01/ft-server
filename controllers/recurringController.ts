@@ -228,7 +228,9 @@ class RecurringController {
       
       const grouped: Record<string, any> = {};
       recurring.forEach(r => {
-        const dateKey = r.nextExecution.toISOString().split('T')[0];
+        // nextExecution is DATEONLY, so Sequelize returns it as a
+        // 'YYYY-MM-DD' string — Date methods like toISOString() don't exist.
+        const dateKey = String(r.nextExecution).split('T')[0];
         if (!grouped[dateKey]) {
           grouped[dateKey] = [];
         }

@@ -23,21 +23,24 @@ export const updateProfile = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    if (email !== user.email) {
-      const existingUser = await User.findOne({ where: { email } });
+    // Only update the fields that were actually sent — a partial update must
+    // not push parseInt(undefined) = NaN into the BIGINT contact_no column.
+    const updates: Record<string, any> = {};
+    if (firstName !== undefined) updates.firstName = firstName;
+    if (middleName !== undefined) updates.middleName = middleName;
+    if (lastName !== undefined) updates.lastName = lastName;
+    if (email !== undefined) updates.email = email;
+    if (contactNo !== undefined && contactNo !== '') updates.contactNo = parseInt(contactNo);
+
+    if (updates.email && updates.email !== user.email) {
+      const existingUser = await User.findOne({ where: { email: updates.email } });
       if (existingUser) {
         res.status(400).json({ error: 'Email already in use' });
         return;
       }
     }
 
-    await user.update({
-      firstName,
-      middleName,
-      lastName,
-      email,
-      contactNo: parseInt(contactNo)
-    });
+    await user.update(updates);
 
     res.json({
       id: user.id,
