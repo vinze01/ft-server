@@ -44,6 +44,9 @@ export const getDashboardSummary = async (req: Request, res: Response): Promise<
         expensesByCategory[exp.category] = (expensesByCategory[exp.category] || 0) + Number(exp.amount);
       });
 
+      // Fetch every monthly budget for the selected year, then compute
+      // "spent" per budget below using only the selected month's expenses —
+      // budgets for other months intentionally report 0 spent.
       const budgets = await Budget.findAll({
         where: { userId, type: 'monthly', year: selectedYear }
       });

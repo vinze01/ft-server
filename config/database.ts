@@ -16,6 +16,11 @@ const sequelize = new Sequelize(
     port: parseInt(process.env.DB_PORT || '5432', 10),
     dialect: 'postgres',
     logging: false,
+    // Managed Postgres providers (Neon, Render, Supabase) require TLS —
+    // set DB_SSL=true in their dashboards / .env.
+    ...(process.env.DB_SSL === 'true' && {
+      dialectOptions: { ssl: { require: true, rejectUnauthorized: false } }
+    }),
     pool: {
       max: 5,
       min: 0,

@@ -56,7 +56,10 @@ On boot the server calls `sequelize.authenticate()` then `sequelize.sync({ alter
 | `DB_NAME` | Sequelize connection | `finance_tracker` |
 | `DB_USER` | Sequelize connection | `postgres` |
 | `DB_PASSWORD` | Sequelize connection | `your_password_here` |
+| `DB_SSL` | set `true` when the database requires TLS (Neon, Render Postgres, Supabase) | `false` |
 | `PORT` | Express listen (default `3001`) | `3001` |
+| `CLIENT_URL` | frontend URL used in password-reset email links | `http://localhost:5173` |
+| `CORS_ORIGIN` | comma-separated allowed browser origins (CORS); unset = permissive (dev only) | `https://your-app.pages.dev` |
 | `JWT_SECRET` | token signing/verification — **required in production** (server exits at boot without it); generate with `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"` | `your_jwt_secret` |
 | `EMAIL_HOST` | password-reset mail | `smtp.example.com` |
 | `EMAIL_PORT` | password-reset mail | `587` |
@@ -66,7 +69,7 @@ On boot the server calls `sequelize.authenticate()` then `sequelize.sync({ alter
 | `CLOUDINARY_API_KEY` | avatar upload | `your_api_key` |
 | `CLOUDINARY_API_SECRET` | avatar upload | `your_api_secret` |
 
-Also read by `config/config.js`: `DB_NAME_TEST` and `DB_NAME_PROD` for the `test`/`production` CLI environments. Password-reset links are hardcoded to `http://localhost:5173/reset-password?token=`. `.env` is gitignored — never commit real secrets.
+Also read by `config/config.js`: `DB_NAME_TEST` and `DB_NAME_PROD` for the `test`/`production` CLI environments. Password-reset links point at `CLIENT_URL` (default `http://localhost:5173`). `.env` is gitignored — never commit real secrets.
 
 ## Project structure
 

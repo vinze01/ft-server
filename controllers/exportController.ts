@@ -136,7 +136,12 @@ class ExportController {
       return headers.map(h => {
         const key = h.toLowerCase().replace(' ', '');
         const value = item[key] || item[h] || '';
-        return `"${String(value).replace(/"/g, '""')}"`;
+        const raw = String(value);
+        // CSV formula injection: a cell starting with =, +, - or @ executes as
+        // a formula when the export is opened in Excel/Sheets. Prefix with a
+        // single quote so it is treated as text (OWASP recommendation).
+        const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
+        return `"${safe.replace(/"/g, '""')}"`;
       }).join(',');
     });
     return [headerRow, ...rows].join('\n');

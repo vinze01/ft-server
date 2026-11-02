@@ -108,6 +108,8 @@ export const updateExpense = async (req: Request, res: Response): Promise<void> 
       amount,
       category,
       date,
+      // Only overwrite the optional detail fields when actually sent, so a
+      // partial PUT (e.g. { amount }) doesn't wipe them to null.
       ...(accountId !== undefined && { accountId: accountId || null }),
       ...(note !== undefined && { note: note || null })
     });

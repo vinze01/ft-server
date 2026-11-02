@@ -19,7 +19,17 @@ if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// Behind hosting proxies (Render, Railway, etc.) so express-rate-limit sees
+// the real client IP instead of the proxy's — without this every visitor
+// shares one rate-limit bucket.
+app.set('trust proxy', 1);
+
+// CORS: allow the deployed frontend origin(s) via CORS_ORIGIN (comma-separated
+// list). Unset = permissive, which is fine for local development only.
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean)
+  : undefined;
+app.use(cors(corsOrigins ? { origin: corsOrigins } : {}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

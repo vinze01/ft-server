@@ -40,7 +40,10 @@ export const forgotPassword = async (req: Request, res: Response): Promise<void>
         resetTokenExpiry
       });
 
-      const resetUrl = `http://localhost:5173/reset-password?token=${resetToken}`;
+      // The link the user opens must point at the deployed frontend, not a
+      // hardcoded localhost — configure CLIENT_URL per environment.
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+      const resetUrl = `${clientUrl}/reset-password?token=${resetToken}`;
 
       await transporter.sendMail({
         from: process.env.EMAIL_USER,

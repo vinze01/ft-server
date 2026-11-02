@@ -102,6 +102,9 @@ export const uploadAvatar = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
+    // Multer kept the image in memory — upload it to Cloudinary as a base64
+    // data URI instead of writing it to disk. public_id is per-user so a new
+    // upload overwrites the previous avatar.
     const result = await cloudinary.uploader.upload(`data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`, {
       upload_preset: 'finance-tracker-upload',
       folder: 'avatars',
