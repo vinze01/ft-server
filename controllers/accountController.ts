@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Account, AccountTransfer } from '../models';
+import sequelize from '../config/database';
 
-const API_URL = 'http://localhost:3001/api';
+const ACCOUNT_TYPES = ['cash', 'bank', 'e_wallet', 'credit_card', 'investment'];
 
 class AccountController {
   async getAll(req: Request, res: Response) {
@@ -34,7 +35,19 @@ class AccountController {
   async create(req: Request, res: Response) {
     try {
       const { name, type, balance, currency, color, icon } = req.body;
-      
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ success: false, error: 'Account name is required' });
+      }
+      if (type !== undefined && !ACCOUNT_TYPES.includes(type)) {
+        // The DB column is an ENUM — without this check an invalid type
+        // surfaced as a raw 500 from PostgreSQL.
+        return res.status(400).json({ success: false, error: 'Invalid account type' });
+      }
+      if (balance !== undefined && balance !== null && !Number.isFinite(Number(balance))) {
+        return res.status(400).json({ success: false, error: 'Balance must be a number' });
+      }
+
       const existingAccounts = await Account.findAll({
         where: { userId: (req as any).userId, isActive: true }
       });
@@ -45,7 +58,7 @@ class AccountController {
         userId: (req as any).userId,
         name,
         type: type || 'bank',
-        balance: balance || 0,
+        balance: balance !== undefined && balance !== null ? Number(balance) : 0,
         currency: currency || 'USD',
         color,
         icon,
@@ -69,7 +82,17 @@ class AccountController {
       }
       
       const { name, type, balance, currency, color, icon, isDefault } = req.body;
-      
+
+      if (name !== undefined && !String(name).trim()) {
+        return res.status(400).json({ success: false, error: 'Account name cannot be empty' });
+      }
+      if (type !== undefined && !ACCOUNT_TYPES.includes(type)) {
+        return res.status(400).json({ success: false, error: 'Invalid account type' });
+      }
+      if (balance !== undefined && balance !== null && !Number.isFinite(Number(balance))) {
+        return res.status(400).json({ success: false, error: 'Balance must be a number' });
+      }
+
       if (isDefault) {
         await Account.update(
           { isDefault: false },
@@ -144,53 +167,74 @@ class AccountController {
   async transfer(req: Request, res: Response) {
     try {
       const { fromAccountId, toAccountId, amount, fee = 0, note } = req.body;
-      
+
       if (fromAccountId === toAccountId) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Cannot transfer to the same account' 
+        return res.status(400).json({
+          success: false,
+          error: 'Cannot transfer to the same account'
         });
       }
-      
-      const fromAccount = await Account.findOne({
-        where: { id: fromAccountId, userId: (req as any).userId }
-      });
-      const toAccount = await Account.findOne({
-        where: { id: toAccountId, userId: (req as any).userId }
-      });
-      
-      if (!fromAccount || !toAccount) {
-        return res.status(404).json({ success: false, error: 'Account not found' });
+
+      const amountNum = Number(amount);
+      const feeNum = Number(fee);
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        return res.status(400).json({ success: false, error: 'Amount must be a positive number' });
       }
-      
-      const amountNum = parseFloat(amount.toString());
-      const feeNum = parseFloat(fee.toString());
+      if (!Number.isFinite(feeNum) || feeNum < 0) {
+        return res.status(400).json({ success: false, error: 'Fee must be zero or a positive number' });
+      }
       const totalAmount = amountNum + feeNum;
-      
-      const fromBalance = parseFloat(fromAccount.balance.toString());
-      if (fromBalance < totalAmount) {
-        return res.status(400).json({ 
-          success: false, 
-          error: 'Insufficient funds' 
+
+      // Transaction + row locks: both balance reads and writes happen inside
+      // one transaction with the rows locked, so concurrent transfers can't
+      // read the same starting balance (lost update) and a mid-flight crash
+      // can't leave money created or destroyed.
+      await sequelize.transaction(async (t) => {
+        const fromAccount = await Account.findOne({
+          where: { id: fromAccountId, userId: (req as any).userId },
+          transaction: t,
+          lock: t.LOCK.UPDATE
         });
-      }
-      
-      const transfer = await AccountTransfer.create({
-        userId: (req as any).userId,
-        fromAccountId,
-        toAccountId,
-        amount: amountNum,
-        fee: feeNum,
-        note
+        const toAccount = await Account.findOne({
+          where: { id: toAccountId, userId: (req as any).userId },
+          transaction: t,
+          lock: t.LOCK.UPDATE
+        });
+
+        if (!fromAccount || !toAccount) {
+          throw Object.assign(new Error('Account not found'), { statusCode: 404 });
+        }
+
+        const fromBalance = parseFloat(fromAccount.balance.toString());
+        if (fromBalance < totalAmount) {
+          throw Object.assign(new Error('Insufficient funds'), { statusCode: 400 });
+        }
+
+        await AccountTransfer.create({
+          userId: (req as any).userId,
+          fromAccountId,
+          toAccountId,
+          amount: amountNum,
+          fee: feeNum,
+          note
+        }, { transaction: t });
+
+        // Round to cents before persisting — JS float math on DECIMAL
+        // balances must not accumulate binary artifacts.
+        const newFrom = Math.round((fromBalance - totalAmount) * 100) / 100;
+        const newTo = Math.round(
+          (parseFloat(toAccount.balance.toString()) + amountNum) * 100
+        ) / 100;
+
+        await fromAccount.update({ balance: newFrom }, { transaction: t });
+        await toAccount.update({ balance: newTo }, { transaction: t });
       });
-      
-      await fromAccount.update({ balance: fromBalance - totalAmount });
-      await toAccount.update({ 
-        balance: parseFloat(toAccount.balance.toString()) + amountNum 
-      });
-      
-      return res.status(201).json({ success: true, data: transfer });
+
+      return res.status(201).json({ success: true, data: { fromAccountId, toAccountId, amount: amountNum, fee: feeNum, note } });
     } catch (error: any) {
+      if (error?.statusCode) {
+        return res.status(error.statusCode).json({ success: false, error: error.message });
+      }
       return res.status(500).json({ success: false, error: error.message });
     }
   }

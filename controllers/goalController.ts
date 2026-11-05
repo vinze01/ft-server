@@ -2,6 +2,11 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { Goal, SavingsAllocation } from '../models';
 
+// Mirrors the ENUM columns in models/Goal.ts — Postgres rejected invalid
+// values with a raw 500 instead of a validation message.
+const GOAL_CATEGORIES = ['emergency', 'investment', 'purchase', 'travel', 'other'];
+const GOAL_PRIORITIES = ['low', 'medium', 'high'];
+
 class GoalController {
   async getAll(req: Request, res: Response) {
     try {
@@ -46,17 +51,34 @@ class GoalController {
   async create(req: Request, res: Response) {
     try {
       const { name, targetAmount, deadline, category, priority, imageUrl } = req.body;
-      
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ success: false, error: 'Goal name is required' });
+      }
+      const target = Number(targetAmount);
+      if (!Number.isFinite(target) || target <= 0) {
+        return res.status(400).json({ success: false, error: 'Target amount must be a positive number' });
+      }
+      if (deadline && isNaN(new Date(deadline).getTime())) {
+        return res.status(400).json({ success: false, error: 'Invalid deadline date' });
+      }
+      if (category !== undefined && category !== null && !GOAL_CATEGORIES.includes(category)) {
+        return res.status(400).json({ success: false, error: 'Invalid goal category' });
+      }
+      if (priority !== undefined && priority !== null && !GOAL_PRIORITIES.includes(priority)) {
+        return res.status(400).json({ success: false, error: 'Invalid goal priority' });
+      }
+
       const goal = await Goal.create({
         userId: (req as any).userId,
         name,
-        targetAmount,
+        targetAmount: target,
         deadline,
         category: category || 'other',
         priority: priority || 'medium',
         imageUrl
       });
-      
+
       return res.status(201).json({ success: true, data: goal });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
@@ -68,39 +90,65 @@ class GoalController {
       const goal = await Goal.findOne({
         where: { id: req.params.id, userId: (req as any).userId }
       });
-      
+
       if (!goal) {
         return res.status(404).json({ success: false, error: 'Goal not found' });
       }
-      
+
       const { name, targetAmount, currentAmount, deadline, category, priority, imageUrl } = req.body;
-      
+
+      if (targetAmount !== undefined && targetAmount !== null && (!Number.isFinite(Number(targetAmount)) || Number(targetAmount) <= 0)) {
+        return res.status(400).json({ success: false, error: 'Target amount must be a positive number' });
+      }
+      if (category !== undefined && category !== null && !GOAL_CATEGORIES.includes(category)) {
+        return res.status(400).json({ success: false, error: 'Invalid goal category' });
+      }
+      if (priority !== undefined && priority !== null && !GOAL_PRIORITIES.includes(priority)) {
+        return res.status(400).json({ success: false, error: 'Invalid goal priority' });
+      }
+
       let isCompleted = goal.isCompleted;
-      let completedAt = goal.completedAt;
-      
-      if (currentAmount !== undefined) {
-        const target = targetAmount || parseFloat(goal.targetAmount.toString());
-        if (currentAmount >= target && !goal.isCompleted) {
+      let completedAt: Date | null = goal.completedAt ?? null;
+
+      if (currentAmount !== undefined && (!Number.isFinite(Number(currentAmount)) || Number(currentAmount) < 0)) {
+        return res.status(400).json({ success: false, error: 'Current amount must be a non-negative number' });
+      }
+
+      // Completion depends on both values, so it must be re-evaluated when
+      // either one changes — raising the target above the saved amount used
+      // to leave the goal flagged completed with a stale completedAt.
+      if (currentAmount !== undefined || (targetAmount !== undefined && targetAmount !== null)) {
+        const target = targetAmount !== undefined && targetAmount !== null
+          ? Number(targetAmount)
+          : parseFloat(goal.targetAmount.toString());
+        const current = currentAmount !== undefined
+          ? Number(currentAmount)
+          : parseFloat(goal.currentAmount.toString());
+
+        const nowComplete = current >= target;
+        if (nowComplete && !goal.isCompleted) {
           isCompleted = true;
           completedAt = new Date();
-        } else if (currentAmount < target && goal.isCompleted) {
+        } else if (!nowComplete && goal.isCompleted) {
           isCompleted = false;
-          completedAt = undefined;
+          // null (not undefined) — Sequelize strips undefined keys, which
+          // would leave a stale completion timestamp on an un-completed goal.
+          completedAt = null;
         }
       }
-      
+
       await goal.update({
         name: name || goal.name,
-        targetAmount: targetAmount || goal.targetAmount,
-        currentAmount: currentAmount !== undefined ? currentAmount : goal.currentAmount,
+        targetAmount: targetAmount !== undefined && targetAmount !== null ? Number(targetAmount) : goal.targetAmount,
+        currentAmount: currentAmount !== undefined ? Number(currentAmount) : goal.currentAmount,
         deadline: deadline || goal.deadline,
         category: category || goal.category,
         priority: priority || goal.priority,
         imageUrl: imageUrl !== undefined ? imageUrl : goal.imageUrl,
         isCompleted,
-        completedAt
+        completedAt: completedAt === null ? (null as any) : completedAt
       });
-      
+
       return res.json({ success: true, data: goal });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
@@ -129,24 +177,35 @@ class GoalController {
       const goal = await Goal.findOne({
         where: { id: req.params.id, userId: (req as any).userId }
       });
-      
+
       if (!goal) {
         return res.status(404).json({ success: false, error: 'Goal not found' });
       }
-      
+
       const { amount, note } = req.body;
-      const currentAmount = parseFloat(goal.currentAmount.toString()) + amount;
+      const contribution = Number(amount);
+      if (!Number.isFinite(contribution) || contribution <= 0) {
+        // Negative or zero contributions previously reduced the saved
+        // amount silently.
+        return res.status(400).json({ success: false, error: 'Contribution must be a positive number' });
+      }
+
+      const currentAmount = Math.round(
+        (parseFloat(goal.currentAmount.toString()) + contribution) * 100
+      ) / 100;
       const targetAmount = parseFloat(goal.targetAmount.toString());
-      
+
       const isCompleted = currentAmount >= targetAmount;
-      const completedAt = isCompleted ? new Date() : undefined;
-      
+      // null (not undefined) — see update(): undefined is stripped and would
+      // leave a stale completion timestamp.
+      const completedAt: Date | null = isCompleted ? new Date() : null;
+
       await goal.update({
         currentAmount,
         isCompleted,
-        completedAt
+        completedAt: completedAt === null ? (null as any) : completedAt
       });
-      
+
       return res.json({ success: true, data: goal });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
@@ -165,7 +224,9 @@ class GoalController {
       
       const target = parseFloat(goal.targetAmount.toString());
       const current = parseFloat(goal.currentAmount.toString());
-      const progress = (current / target) * 100;
+      // Guard against a zero target (only the SQL CHECK guarded it before,
+      // and sync-created databases don't have that CHECK).
+      const progress = target > 0 ? (current / target) * 100 : 0;
       
       let requiredMonthly = 0;
       let projectedCompletion: string | null = null;
@@ -175,8 +236,10 @@ class GoalController {
         const now = new Date();
         const deadline = new Date(goal.deadline);
         const monthsRemaining = this.monthsBetween(now, deadline);
-        
-        if (monthsRemaining > 0) {
+
+        // Only project while there is something left to save — a fully
+        // funded goal has no required monthly amount.
+        if (monthsRemaining > 0 && target - current > 0) {
           requiredMonthly = (target - current) / monthsRemaining;
           const projectedDate = new Date(now);
           projectedDate.setMonth(projectedDate.getMonth() + Math.ceil((target - current) / requiredMonthly));

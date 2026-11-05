@@ -1,21 +1,64 @@
 import { Request, Response } from 'express';
+import { Op } from 'sequelize';
 import Budget, { HalfMonth } from '../models/Budget';
 import { BudgetInput } from '../types/finance';
+
+const BUDGET_TYPES = ['monthly', 'yearly', 'bi-monthly'];
+
+// Month names sort alphabetically in SQL — order chronologically instead.
+const MONTH_INDEX: Record<string, number> = {
+  January: 1, February: 2, March: 3, April: 4, May: 5, June: 6,
+  July: 7, August: 8, September: 9, October: 10, November: 11, December: 12
+};
+
+/** year DESC, then chronological month DESC (yearly rows first), halfMonth DESC, category ASC. */
+function sortBudgets(budgets: Budget[]): Budget[] {
+  return budgets.sort((a, b) => {
+    if (a.year !== b.year) return b.year - a.year;
+    const am = a.month ? MONTH_INDEX[a.month] : 99;
+    const bm = b.month ? MONTH_INDEX[b.month] : 99;
+    if (am !== bm) return bm - am;
+    const ah = a.halfMonth ?? 0;
+    const bh = b.halfMonth ?? 0;
+    if (ah !== bh) return bh - ah;
+    return a.category.localeCompare(b.category) || b.id - a.id;
+  });
+}
 
 export const addBudget = async (req: Request, res: Response): Promise<void> => {
   try {
     const { category, amount, months, type, year, halfMonths } = req.body as BudgetInput;
     const userId = (req as any).userId;
 
+    const budgetType = type || 'monthly';
+    if (!BUDGET_TYPES.includes(budgetType)) {
+      res.status(400).json({ error: 'Invalid budget type' });
+      return;
+    }
+    if (!category || !String(category).trim()) {
+      res.status(400).json({ error: 'Category is required' });
+      return;
+    }
+    const amountNum = Number(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      res.status(400).json({ error: 'Amount must be a positive number' });
+      return;
+    }
+    const budgetYear = Number(year);
+    if (!Number.isInteger(budgetYear) || budgetYear < 1900 || budgetYear > 2200) {
+      res.status(400).json({ error: 'Invalid year' });
+      return;
+    }
+
     const budgetMonths = (months && months.length > 0) ? months.filter((m: string) => m && m.trim()) : [];
     const budgetHalfMonths: number[] = (halfMonths && halfMonths.length > 0) ? halfMonths.filter((h: number) => h === 1 || h === 2) : [];
 
-    if (budgetMonths.length === 0 && type !== 'yearly') {
+    if (budgetMonths.length === 0 && budgetType !== 'yearly') {
       res.status(400).json({ error: 'Please select at least one month' });
       return;
     }
 
-    if (type === 'bi-monthly' && budgetHalfMonths.length === 0) {
+    if (budgetType === 'bi-monthly' && budgetHalfMonths.length === 0) {
       res.status(400).json({ error: 'Please select at least one pay period' });
       return;
     }
@@ -24,11 +67,11 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
 
     // Same as incomes: monthly/yearly rows have halfMonth NULL, so iterate a
     // single pass per month rather than zipping with the (empty) halfMonths.
-    const halfMonthValues: (number | null)[] = type === 'bi-monthly' ? budgetHalfMonths : [null];
+    const halfMonthValues: (number | null)[] = budgetType === 'bi-monthly' ? budgetHalfMonths : [null];
 
-    if (type === 'yearly') {
+    if (budgetType === 'yearly') {
       const existing = await Budget.findOne({
-        where: { userId, category, type, year }
+        where: { userId, category, type: budgetType, year: budgetYear }
       });
       if (existing) existingBudgets.push(existing);
     } else {
@@ -37,12 +80,12 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
           const whereClause: any = {
             userId,
             category,
-            type,
-            year,
+            type: budgetType,
+            year: budgetYear,
             month
           };
-          
-          if (type === 'bi-monthly') {
+
+          if (budgetType === 'bi-monthly') {
             whereClause.halfMonth = halfMonth;
           }
 
@@ -59,13 +102,13 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
 
     const createdBudgets: Budget[] = [];
 
-    if (type === 'yearly') {
+    if (budgetType === 'yearly') {
       const budget = await Budget.create({
         category,
-        amount,
+        amount: amountNum,
         month: null,
-        type: type || 'monthly',
-        year,
+        type: budgetType,
+        year: budgetYear,
         halfMonth: null,
         userId
       });
@@ -75,14 +118,14 @@ export const addBudget = async (req: Request, res: Response): Promise<void> => {
         for (const halfMonth of halfMonthValues) {
           const budgetData: any = {
             category,
-            amount,
+            amount: amountNum,
             month,
-            type: type || 'monthly',
-            year,
+            type: budgetType,
+            year: budgetYear,
             userId
           };
-          
-          if (type === 'bi-monthly') {
+
+          if (budgetType === 'bi-monthly') {
             budgetData.halfMonth = halfMonth;
           }
 
@@ -109,9 +152,11 @@ export const getBudgets = async (req: Request, res: Response): Promise<void> => 
     if (year) where.year = parseInt(year as string);
 
     const budgets = await Budget.findAll({
-      where,
-      order: [['year', 'DESC'], ['halfMonth', 'DESC'], ['month', 'DESC'], ['category', 'ASC']]
+      where
+      // `month` is a name string — SQL ordering is alphabetical, so sort
+      // chronologically in JS instead.
     });
+    sortBudgets(budgets);
 
     res.json(budgets);
   } catch (error) {
@@ -126,9 +171,6 @@ export const updateBudget = async (req: Request, res: Response): Promise<void> =
     const userId = (req as any).userId;
     const { category, amount, month, months, type, year, halfMonth, halfMonths } = req.body as BudgetInput;
 
-    const budgetMonth = month || (months && months[0]) || null;
-    const budgetHalfMonth = halfMonth || (halfMonths && halfMonths[0]) || null;
-
     const budget = await Budget.findOne({
       where: { id: parseInt(id), userId }
     });
@@ -138,15 +180,35 @@ export const updateBudget = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
+    const budgetMonth = month || (months && months[0]) || budget.month || null;
+    const budgetHalfMonth = halfMonth !== undefined ? halfMonth : (halfMonths && halfMonths[0]) || budget.halfMonth;
+    // Fall back to stored values for anything the body omits, so the
+    // duplicate check reflects the row as it will actually be saved.
+    const newType = type || budget.type;
+    const newCategory = category || budget.category;
+    const newYear = year || budget.year;
+
+    if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+      res.status(400).json({ error: 'Amount must be a positive number' });
+      return;
+    }
+    if (newType && !BUDGET_TYPES.includes(newType)) {
+      res.status(400).json({ error: 'Invalid budget type' });
+      return;
+    }
+
     const existingBudget = await Budget.findOne({
       where: {
         userId,
-        category,
-        type,
-        id: { [require('sequelize').Op.ne]: parseInt(id) },
-        ...(type === 'monthly' && { month: budgetMonth, year, halfMonth: null }),
-        ...(type === 'yearly' && { year }),
-        ...(type === 'bi-monthly' && { year, halfMonth: budgetHalfMonth as HalfMonth })
+        category: newCategory,
+        type: newType,
+        id: { [Op.ne]: parseInt(id) },
+        ...(newType === 'monthly' && { month: budgetMonth, year: newYear, halfMonth: null }),
+        ...(newType === 'yearly' && { year: newYear }),
+        // bi-monthly rows are unique per (category, month, half) — the
+        // previous check omitted `month`, causing false rejections across
+        // different months.
+        ...(newType === 'bi-monthly' && { month: budgetMonth, year: newYear, halfMonth: budgetHalfMonth as HalfMonth })
       }
     });
 
@@ -156,12 +218,12 @@ export const updateBudget = async (req: Request, res: Response): Promise<void> =
     }
 
     await budget.update({
-      category,
-      amount,
-      month: (type === 'monthly' || type === 'bi-monthly') ? budgetMonth : null,
-      type: type || 'monthly',
-      year,
-      halfMonth: type === 'bi-monthly' ? budgetHalfMonth : null
+      category: newCategory,
+      amount: amount !== undefined ? Number(amount) : budget.amount,
+      month: (newType === 'monthly' || newType === 'bi-monthly') ? budgetMonth : null,
+      type: newType,
+      year: newYear,
+      halfMonth: newType === 'bi-monthly' ? budgetHalfMonth : null
     });
     res.json(budget);
   } catch (error) {

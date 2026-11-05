@@ -19,10 +19,12 @@ class ExportController {
 
       if (type === 'income') {
         data = await Income.findAll({ where, order: [['createdAt', 'DESC']] });
-        headers = ['ID', 'Amount', 'Category ID', 'Date', 'Note', 'Created At'];
+        headers = ['ID', 'Amount', 'Type', 'Year', 'Month', 'Category', 'Note', 'Created At'];
       } else {
         data = await Expense.findAll({ where, order: [['date', 'DESC']] });
-        headers = ['ID', 'Amount', 'Category ID', 'Date', 'Note', 'Created At'];
+        // Expenses carry a description — exporting without it lost the most
+        // important column and made round-trip imports lose their labels.
+        headers = ['ID', 'Amount', 'Description', 'Category', 'Date', 'Note', 'Created At'];
       }
 
       if (format === 'csv') {
@@ -86,24 +88,43 @@ class ExportController {
       for (let i = 0; i < parsed.length; i++) {
         const row = parsed[i];
         try {
+          // Accept both `category` and the legacy template's `category_id`.
+          const category = row.category || row.category_id || 'Other';
+          const amount = Number(row.amount);
+          if (!Number.isFinite(amount) || amount <= 0) {
+            throw new Error('amount must be a positive number');
+          }
           if (row.type === 'income') {
+            // Book the income into the period its row describes, not
+            // unconditionally the current month.
+            const rowDate = row.date ? new Date(row.date) : new Date();
+            if (isNaN(rowDate.getTime())) {
+              throw new Error('invalid date');
+            }
             await Income.create({
               userId: (req as any).userId,
-              amount: row.amount,
+              amount,
               type: 'monthly',
-              year: new Date().getFullYear(),
-              month: new Date().toLocaleString('default', { month: 'long' }),
-              category: row.category || 'Other',
+              year: rowDate.getFullYear(),
+              month: rowDate.toLocaleString('default', { month: 'long' }),
+              category,
               note: row.note
             } as any);
             imported++;
           } else {
+            const rowDate = row.date ? new Date(row.date) : new Date();
+            if (isNaN(rowDate.getTime())) {
+              throw new Error('invalid date');
+            }
             await Expense.create({
               userId: (req as any).userId,
-              description: row.description || 'Imported expense',
-              amount: row.amount,
-              category: row.category || 'Other',
-              date: new Date(row.date || new Date().toISOString().split('T')[0]),
+              // The template has no `description` column, so fall back to the
+              // note (then the category) instead of a generic placeholder —
+              // imported rows stayed searchable and identifiable.
+              description: row.description || row.note || category,
+              amount,
+              category,
+              date: rowDate,
               note: row.note
             } as any);
             imported++;
@@ -121,21 +142,43 @@ class ExportController {
   }
 
   async getTemplate(req: Request, res: Response) {
-    const headers = 'type,amount,category_id,date,note\n';
-    const sample = 'income,1000,1,2024-01-15,Monthly salary\n';
-    const sample2 = 'expense,50,2,2024-01-20,Groceries';
+    // Header matches what parseCSV reads (category). Legacy templates with
+    // `category_id` are still accepted by the importer.
+    const headers = 'type,amount,category,date,note\n';
+    const sample = 'income,1000,Salary,2024-01-15,Monthly salary\n';
+    const sample2 = 'expense,50,Groceries,2024-01-20,Weekly groceries';
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=import_template.csv');
     return res.send(headers + sample + sample2);
   }
 
+  /** CSV header → model attribute. "Created At" previously derived to a
+   * nonexistent `createdat` key, leaving that column blank in exports. */
+  private columnKey(header: string): string {
+    const map: Record<string, string> = {
+      'id': 'id',
+      'amount': 'amount',
+      'type': 'type',
+      'year': 'year',
+      'month': 'month',
+      'category': 'category',
+      'category id': 'category',
+      'category_id': 'category',
+      'date': 'date',
+      'note': 'note',
+      'created at': 'createdAt',
+      'created_at': 'createdAt'
+    };
+    return map[header.toLowerCase().trim()] ?? header.toLowerCase().replace(/\s+/g, '');
+  }
+
   private arrayToCSV(data: any[], headers: string[]): string {
     const headerRow = headers.join(',');
     const rows = data.map(item => {
       return headers.map(h => {
-        const key = h.toLowerCase().replace(' ', '');
-        const value = item[key] || item[h] || '';
+        const key = this.columnKey(h);
+        const value = item[key] ?? '';
         const raw = String(value);
         // CSV formula injection: a cell starting with =, +, - or @ executes as
         // a formula when the export is opened in Excel/Sheets. Prefix with a
@@ -147,17 +190,56 @@ class ExportController {
     return [headerRow, ...rows].join('\n');
   }
 
+  /** RFC-4180-style CSV parse: quoted fields may contain commas and escaped
+   * double quotes. The previous split(',') corrupted any quoted value that
+   * contained a comma. */
   private parseCSV(content: string): any[] {
-    const lines = content.split('\n').filter(line => line.trim());
-    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-    
-    return lines.slice(1).map(line => {
-      const values = line.split(',').map(v => v.trim().replace(/"/g, ''));
-      const row: any = {};
+    const rows: string[][] = [];
+    let field = '';
+    let row: string[] = [];
+    let inQuotes = false;
+
+    for (let i = 0; i < content.length; i++) {
+      const ch = content[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (content[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += ch;
+        }
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(field.trim());
+        field = '';
+      } else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && content[i + 1] === '\n') i++;
+        row.push(field.trim());
+        field = '';
+        if (row.some(v => v !== '')) rows.push(row);
+        row = [];
+      } else {
+        field += ch;
+      }
+    }
+    // Final field/row without a trailing newline.
+    row.push(field.trim());
+    if (row.some(v => v !== '')) rows.push(row);
+
+    if (rows.length === 0) return [];
+    const headers = rows[0].map(h => h.trim().replace(/^"|"$/g, ''));
+
+    return rows.slice(1).map(values => {
+      const obj: any = {};
       headers.forEach((h, i) => {
-        row[h] = values[i];
+        obj[h] = (values[i] ?? '').replace(/^"|"$/g, '');
       });
-      return row;
+      return obj;
     });
   }
 }

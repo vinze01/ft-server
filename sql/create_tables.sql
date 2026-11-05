@@ -19,6 +19,8 @@ CREATE TABLE users (
     avatar VARCHAR(255),
     reset_token VARCHAR(255),
     reset_token_expiry TIMESTAMP,
+    totp_secret VARCHAR(255),
+    two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -22,7 +22,12 @@ import { authLimiter } from '../middleware/rateLimiter';
 import { validateIdParam } from '../middleware/validateId';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
+// CSV import: memory storage with a size cap — unrestricted memory storage
+// on a public endpoint is a trivial memory-DoS vector.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
 
 // Avatar uploads: images only, capped at 5 MB. The shared `upload` instance
 // above stays unrestricted because the CSV import endpoint needs non-image files.

@@ -14,22 +14,27 @@ class SecurityController {
     try {
       const userId = (req as any).userId;
       const user = await User.findByPk(userId);
-      const secret = speakeasy.generateSecret({ name: `FinanceTracker:${user?.email}` });
-      
-      const qrCode = await QRCode.toDataURL(secret.otpauth_url!);
-      
-      await User.update(
-        { resetToken: secret.base32 },
-        { where: { id: userId } }
-      );
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      if (user.twoFactorEnabled) {
+        return res.status(400).json({ success: false, error: '2FA is already enabled' });
+      }
 
-      return res.json({ 
-        success: true, 
-        data: { 
-          qrCode, 
+      const secret = speakeasy.generateSecret({ name: `FinanceTracker:${user.email}` });
+      const qrCode = await QRCode.toDataURL(secret.otpauth_url!);
+
+      // Store the pending secret in its dedicated column and keep 2FA
+      // disabled until the user proves possession via verify2FA.
+      await user.update({ totpSecret: secret.base32, twoFactorEnabled: false });
+
+      return res.json({
+        success: true,
+        data: {
+          qrCode,
           secret: secret.base32,
-          message: 'Verify this code with your authenticator app' 
-        } 
+          message: 'Verify this code with your authenticator app'
+        }
       });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
@@ -39,14 +44,17 @@ class SecurityController {
   async verify2FA(req: Request, res: Response) {
     try {
       const { code } = req.body;
-      
+
       const user = await User.findByPk((req as any).userId);
-      if (!user || !user.resetToken) {
-        return res.status(400).json({ success: false, error: '2FA not initialized' });
+      if (!user || !user.totpSecret) {
+        return res.status(400).json({ success: false, error: '2FA not initialized — call enable first' });
+      }
+      if (!code) {
+        return res.status(400).json({ success: false, error: 'Verification code is required' });
       }
 
       const verified = speakeasy.totp.verify({
-        secret: user.resetToken,
+        secret: user.totpSecret,
         encoding: 'base32',
         token: code,
         window: 1
@@ -56,10 +64,9 @@ class SecurityController {
         return res.status(400).json({ success: false, error: 'Invalid code' });
       }
 
-      await User.update(
-        { resetToken: undefined },
-        { where: { id: (req as any).userId } }
-      );
+      // Verified possession — now enforce the challenge at login. The
+      // secret is kept so future logins can be verified against it.
+      await user.update({ twoFactorEnabled: true });
 
       return res.json({ success: true, message: '2FA enabled successfully' });
     } catch (error: any) {
@@ -70,7 +77,7 @@ class SecurityController {
   async disable2FA(req: Request, res: Response) {
     try {
       const { password } = req.body;
-      
+
       const user = await User.findByPk((req as any).userId);
       if (!user) {
         return res.status(404).json({ success: false, error: 'User not found' });
@@ -82,10 +89,7 @@ class SecurityController {
         return res.status(400).json({ success: false, error: 'Password is incorrect' });
       }
 
-      await User.update(
-        { resetToken: undefined },
-        { where: { id: (req as any).userId } }
-      );
+      await user.update({ twoFactorEnabled: false, totpSecret: null as any });
 
       return res.json({ success: true, message: '2FA disabled' });
     } catch (error: any) {
@@ -93,10 +97,27 @@ class SecurityController {
     }
   }
 
+  /** Verify a TOTP code against the user's stored secret (used by login). */
+  async verifyLogin2FA(user: User, code: unknown): Promise<'ok' | 'required' | 'invalid'> {
+    if (!user.twoFactorEnabled) return 'ok';
+    if (typeof code !== 'string' || !code.trim()) return 'required';
+    const valid = speakeasy.totp.verify({
+      secret: user.totpSecret || '',
+      encoding: 'base32',
+      token: code.trim(),
+      window: 1
+    });
+    return valid ? 'ok' : 'invalid';
+  }
+
   async getSessions(req: Request, res: Response) {
     try {
       const sessions = await Session.findAll({
-        where: { userId: (req as any).userId },
+        where: {
+          userId: (req as any).userId,
+          // Hide expired sessions — they are dead rows, not active devices.
+          expiresAt: { [Op.gt]: new Date() }
+        },
         order: [['createdAt', 'DESC']],
         limit: 20
       });
@@ -130,15 +151,10 @@ class SecurityController {
 
   async revokeOtherSessions(req: Request, res: Response) {
     try {
-      await Session.update(
-        { isCurrent: false },
-        { where: { userId: (req as any).userId, isCurrent: false } }
-      );
-
       await Session.destroy({
-        where: { 
-          userId: (req as any).userId, 
-          isCurrent: false 
+        where: {
+          userId: (req as any).userId,
+          isCurrent: false
         }
       });
 

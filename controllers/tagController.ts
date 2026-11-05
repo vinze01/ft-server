@@ -65,14 +65,38 @@ class TagController {
   async addToTransactions(req: Request, res: Response) {
     try {
       const { transactionIds, transactionType } = req.body;
-      const tagId = parseInt(req.params.id);
-      
+      const userId = (req as any).userId;
+
+      if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'transactionIds must be a non-empty array' });
+      }
+      if (transactionType !== 'income' && transactionType !== 'expense') {
+        return res.status(400).json({ success: false, error: 'transactionType must be "income" or "expense"' });
+      }
+
+      // Ownership: the tag must belong to the caller...
+      const tag = await Tag.findOne({
+        where: { id: req.params.id, userId }
+      });
+      if (!tag) {
+        return res.status(404).json({ success: false, error: 'Tag not found' });
+      }
+
+      // ...and every target transaction must belong to the caller too.
+      const expected = transactionIds.length;
+      const owned = transactionType === 'income'
+        ? await Income.count({ where: { id: transactionIds, userId } })
+        : await Expense.count({ where: { id: transactionIds, userId } });
+      if (owned !== expected) {
+        return res.status(403).json({ success: false, error: 'One or more transactions do not belong to you' });
+      }
+
       for (const txId of transactionIds) {
         await TransactionTag.findOrCreate({
           where: {
             transactionId: txId,
             transactionType,
-            tagId
+            tagId: tag.id
           }
         });
       }
@@ -84,16 +108,28 @@ class TagController {
 
   async getTransactions(req: Request, res: Response) {
     try {
-      const tagId = parseInt(req.params.id);
-      const { type, from, to } = req.query;
       const userId = (req as any).userId;
-      
-      const transactionTags = await TransactionTag.findAll({
-        where: { tagId }
+
+      // Ownership: only expose link data for tags the caller owns.
+      const tag = await Tag.findOne({
+        where: { id: req.params.id, userId }
       });
-      
+      if (!tag) {
+        return res.status(404).json({ success: false, error: 'Tag not found' });
+      }
+
+      const { type, from, to } = req.query;
+
+      const transactionTags = await TransactionTag.findAll({
+        where: { tagId: tag.id }
+      });
+
       const txIds = transactionTags.map(tt => tt.transactionId);
-      
+
+      if (txIds.length === 0) {
+        return res.json({ success: true, data: [] });
+      }
+
       let transactions;
       if (type === 'income') {
         transactions = await Income.findAll({
@@ -104,7 +140,7 @@ class TagController {
           where: { id: txIds, userId }
         });
       }
-      
+
       return res.json({ success: true, data: transactions });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });

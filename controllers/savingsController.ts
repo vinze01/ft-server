@@ -1,12 +1,15 @@
 import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { SavingsConfig, SavingsAllocation, Income, Expense, Account, Goal } from '../models';
+import sequelize from '../config/database';
 
 enum SavingsMode {
   FIXED_PERCENTAGE = 'fixed_percentage',
   LEFTOVER_BASED = 'leftover_based',
   GOAL_BASED = 'goal_based'
 }
+
+const MODES = Object.values(SavingsMode);
 
 class SavingsController {
   async getConfig(req: Request, res: Response) {
@@ -23,7 +26,25 @@ class SavingsController {
   async createOrUpdateConfig(req: Request, res: Response) {
     try {
       const { mode, targetPercentage, targetAccountId, spendingAccountId, minBalance, isActive } = req.body;
-      
+
+      if (mode !== undefined && !MODES.includes(mode)) {
+        return res.status(400).json({ success: false, error: 'Invalid savings mode' });
+      }
+
+      // Both account references are user-supplied IDs that later receives
+      // balance credits — they must belong to the caller (or be null).
+      for (const field of ['targetAccountId', 'spendingAccountId'] as const) {
+        const value = req.body[field];
+        if (value !== undefined && value !== null && value !== '') {
+          const account = await Account.findOne({
+            where: { id: value, userId: (req as any).userId }
+          });
+          if (!account) {
+            return res.status(400).json({ success: false, error: `${field === 'targetAccountId' ? 'Target' : 'Spending'} account not found` });
+          }
+        }
+      }
+
       let config = await SavingsConfig.findOne({
         where: { userId: (req as any).userId }
       });
@@ -42,8 +63,8 @@ class SavingsController {
           userId: (req as any).userId,
           mode: mode || SavingsMode.FIXED_PERCENTAGE,
           targetPercentage: targetPercentage || 10,
-          targetAccountId,
-          spendingAccountId,
+          targetAccountId: targetAccountId || null,
+          spendingAccountId: spendingAccountId || null,
           minBalance: minBalance || 0,
           isActive: isActive !== false
         });
@@ -91,12 +112,33 @@ class SavingsController {
       const start = periodStart ? new Date(periodStart) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
       const end = periodEnd ? new Date(periodEnd) : new Date();
 
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return res.status(400).json({ success: false, error: 'Invalid period dates' });
+      }
+
       const config = await SavingsConfig.findOne({
         where: { userId: (req as any).userId, isActive: true }
       });
 
       if (!config) {
         return res.json({ success: true, data: { allocated: 0, allocations: [] } });
+      }
+
+      // Idempotency guard: one calculation per config per period. Without
+      // this, pressing "Calculate" twice double-credits the target account.
+      const existing = await SavingsAllocation.findOne({
+        where: {
+          userId: (req as any).userId,
+          savingsConfigId: config.id,
+          periodStart: start,
+          periodEnd: end
+        }
+      });
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          error: 'Savings were already calculated for this period'
+        });
       }
 
       const incomes = await Income.findAll({
@@ -134,7 +176,7 @@ class SavingsController {
             where: { userId: (req as any).userId, isCompleted: false }
           });
           const monthlyIncome = totalIncome / Math.max(1, (end.getMonth() - start.getMonth() + 1));
-          
+
           for (const goal of goals) {
             const target = parseFloat(goal.targetAmount.toString());
             const current = parseFloat(goal.currentAmount.toString());
@@ -143,7 +185,7 @@ class SavingsController {
               const monthsLeft = this.monthsBetween(new Date(), goal.deadline);
               const required = remaining / Math.max(1, monthsLeft);
               const allocated = Math.min(monthlyIncome * 0.5, required);
-              
+
               if (allocated > 0) {
                 const allocation = await SavingsAllocation.create({
                   userId: (req as any).userId,
@@ -162,26 +204,39 @@ class SavingsController {
           break;
       }
 
-      if (savingsAmount > 0 && config.targetAccountId) {
-        const targetAccount = await Account.findByPk(config.targetAccountId);
-        if (targetAccount) {
-          const currentBalance = parseFloat(targetAccount.balance.toString());
-          await targetAccount.update({
-            balance: currentBalance + savingsAmount
-          });
-        }
+      savingsAmount = Math.round(savingsAmount * 100) / 100;
 
-        if (allocations.length === 0) {
-          const allocation = await SavingsAllocation.create({
-            userId: (req as any).userId,
-            savingsConfigId: config.id,
-            amount: savingsAmount,
-            periodStart: start,
-            periodEnd: end,
-            status: 'allocated'
-          });
-          allocations.push(allocation);
-        }
+      // The target account must belong to the caller — config.targetAccountId
+      // is user-supplied and previously allowed crediting another user's
+      // account. Transaction: the credit and allocation rows commit together.
+      if (savingsAmount > 0) {
+        await sequelize.transaction(async (t) => {
+          if (config.targetAccountId) {
+            const targetAccount = await Account.findOne({
+              where: { id: config.targetAccountId, userId: (req as any).userId },
+              transaction: t,
+              lock: t.LOCK.UPDATE
+            });
+            if (targetAccount) {
+              const currentBalance = parseFloat(targetAccount.balance.toString());
+              await targetAccount.update({
+                balance: Math.round((currentBalance + savingsAmount) * 100) / 100
+              }, { transaction: t });
+            }
+          }
+
+          if (allocations.length === 0) {
+            const allocation = await SavingsAllocation.create({
+              userId: (req as any).userId,
+              savingsConfigId: config.id,
+              amount: savingsAmount,
+              periodStart: start,
+              periodEnd: end,
+              status: 'allocated'
+            }, { transaction: t });
+            allocations.push(allocation);
+          }
+        });
       }
 
       await config.update({ lastCalculatedAt: new Date() });
@@ -259,13 +314,17 @@ class SavingsController {
   private async getAverageIncome(userId: number, months: number): Promise<number> {
     const now = new Date();
     const year = now.getFullYear();
-    
+
     const incomes = await Income.findAll({
       where: { userId, year }
     });
-    
+
     const total = incomes.reduce((sum, inc) => sum + parseFloat(inc.amount.toString()), 0);
-    return total / months;
+    // Divide by the months actually elapsed this year (capped at the window
+    // size) — dividing YTD total by a fixed 6 understated the average early
+    // in the year.
+    const monthsElapsed = Math.min(months, now.getMonth() + 1);
+    return total / Math.max(1, monthsElapsed);
   }
 
   private async getAverageExpenses(userId: number, months: number): Promise<number> {

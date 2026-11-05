@@ -13,11 +13,13 @@ interface UserAttributes {
   avatar?: string;
   resetToken?: string;
   resetTokenExpiry?: Date;
+  twoFactorEnabled: boolean;
+  totpSecret?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
-interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'avatar' | 'middleName' | 'resetToken' | 'resetTokenExpiry'> {}
+interface UserCreationAttributes extends Optional<UserAttributes, 'id' | 'avatar' | 'middleName' | 'resetToken' | 'resetTokenExpiry' | 'twoFactorEnabled' | 'totpSecret'> {}
 
 class User extends Model<UserAttributes, UserCreationAttributes> implements UserAttributes {
   public id!: number;
@@ -31,6 +33,8 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
   public avatar?: string;
   public resetToken?: string;
   public resetTokenExpiry?: Date;
+  public twoFactorEnabled!: boolean;
+  public totpSecret?: string;
   public readonly createdAt!: Date;
   public readonly updatedAt!: Date;
 }
@@ -87,6 +91,20 @@ User.init(
       type: DataTypes.DATE,
       allowNull: true,
       field: 'reset_token_expiry'
+    },
+    twoFactorEnabled: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'two_factor_enabled'
+    },
+    totpSecret: {
+      // Base32 TOTP secret. Kept separate from reset_token, which stores
+      // password-reset hashes — the two previously shared one column and
+      // overwrote each other.
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'totp_secret'
     }
   },
   {

@@ -2,6 +2,9 @@ import { Request, Response } from 'express';
 import { Op } from 'sequelize';
 import { AutomationRule, SavingsConfig, Notification, Expense, Income, Bill, Account } from '../models';
 
+const TRIGGER_TYPES = ['balance_low', 'due_date', 'transaction_added', 'recurring_executed', 'periodic'];
+const ACTION_TYPES = ['allocate_savings', 'send_notification', 'create_transaction', 'mark_paid'];
+
 class AutomationController {
   async getAll(req: Request, res: Response) {
     try {
@@ -33,6 +36,16 @@ class AutomationController {
     try {
       const { name, description, triggerType, triggerConditions, actionType, actionParams, isActive } = req.body;
 
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ success: false, error: 'Rule name is required' });
+      }
+      if (!TRIGGER_TYPES.includes(triggerType)) {
+        return res.status(400).json({ success: false, error: 'Invalid trigger type' });
+      }
+      if (!ACTION_TYPES.includes(actionType)) {
+        return res.status(400).json({ success: false, error: 'Invalid action type' });
+      }
+
       const rule = await AutomationRule.create({
         userId: (req as any).userId,
         name,
@@ -61,6 +74,13 @@ class AutomationController {
       }
 
       const { name, description, triggerType, triggerConditions, actionType, actionParams, isActive } = req.body;
+
+      if (triggerType !== undefined && !TRIGGER_TYPES.includes(triggerType)) {
+        return res.status(400).json({ success: false, error: 'Invalid trigger type' });
+      }
+      if (actionType !== undefined && !ACTION_TYPES.includes(actionType)) {
+        return res.status(400).json({ success: false, error: 'Invalid action type' });
+      }
 
       await rule.update({
         name: name || rule.name,
@@ -124,10 +144,12 @@ class AutomationController {
       }
 
       const wouldTrigger = this.checkCondition(rule.triggerConditions, testData);
-      
+
+      // Dry run only: describe what the action WOULD do without writing
+      // anything — a "test" must never mutate financial data.
       let actionResult = null;
       if (wouldTrigger) {
-        actionResult = await this.executeAction(rule.actionType, rule.actionParams, (req as any).userId);
+        actionResult = await this.describeAction(rule.actionType, rule.actionParams, (req as any).userId);
       }
 
       return res.json({ success: true, data: { wouldTrigger, actionResult } });
@@ -143,21 +165,28 @@ class AutomationController {
       });
 
       let executedCount = 0;
+      const errors: { ruleId: number; error: string }[] = [];
 
+      // Per-rule error isolation: one failing rule must not abort the run
+      // (rules already executed stay executed).
       for (const rule of rules) {
-        const shouldExecute = await this.checkTrigger(rule);
-        
-        if (shouldExecute) {
-          await this.executeAction(rule.actionType, rule.actionParams, (req as any).userId);
-          await rule.update({
-            executionCount: rule.executionCount + 1,
-            lastExecutedAt: new Date()
-          });
-          executedCount++;
+        try {
+          const shouldExecute = await this.checkTrigger(rule);
+
+          if (shouldExecute) {
+            await this.executeAction(rule.actionType, rule.actionParams, (req as any).userId);
+            await rule.update({
+              executionCount: rule.executionCount + 1,
+              lastExecutedAt: new Date()
+            });
+            executedCount++;
+          }
+        } catch (ruleError: any) {
+          errors.push({ ruleId: rule.id, error: ruleError.message });
         }
       }
 
-      return res.json({ success: true, data: { executedCount } });
+      return res.json({ success: true, data: { executedCount, errors } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error.message });
     }
@@ -212,19 +241,60 @@ class AutomationController {
     }
   }
 
-  private async executeAction(actionType: string, actionParams: any, userId: number): Promise<any> {
+  private async describeAction(actionType: string, actionParams: any, userId: number): Promise<any> {
     switch (actionType) {
       case 'allocate_savings': {
         const amount = actionParams.amount || 10;
         const savingsConfig = await SavingsConfig.findOne({
           where: { userId, isActive: true }
         });
-        
         if (savingsConfig?.targetAccountId) {
-          const account = await Account.findByPk(savingsConfig.targetAccountId);
+          const account = await Account.findOne({
+            where: { id: savingsConfig.targetAccountId, userId }
+          });
+          if (account) {
+            return { wouldDo: `Move ${amount} to account "${account.name}"`, accountId: account.id };
+          }
+        }
+        return { wouldDo: `Move ${amount} to savings (no active target account configured)` };
+      }
+      case 'send_notification':
+        return { wouldDo: `Send notification "${actionParams.title || 'Automation Alert'}"` };
+      case 'create_transaction':
+        return { wouldDo: `Create expense "${actionParams.description || 'Automated expense'}" for ${actionParams.amount ?? '(no amount set)'}` };
+      case 'mark_paid': {
+        // Ownership check even in the dry run — do not leak other users' bills.
+        const bill = await Bill.findOne({ where: { id: actionParams.billId, userId } });
+        if (bill) {
+          return { wouldDo: `Mark bill "${bill.name}" as paid`, billId: bill.id };
+        }
+        return { wouldDo: 'Mark bill as paid (bill not found)' };
+      }
+      default:
+        return { wouldDo: 'Unknown action' };
+    }
+  }
+
+  private async executeAction(actionType: string, actionParams: any, userId: number): Promise<any> {
+    switch (actionType) {
+      case 'allocate_savings': {
+        const amount = Number(actionParams.amount || 10);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw Object.assign(new Error('Automation amount must be a positive number'), { statusCode: 400 });
+        }
+        const savingsConfig = await SavingsConfig.findOne({
+          where: { userId, isActive: true }
+        });
+
+        if (savingsConfig?.targetAccountId) {
+          // Scoped by userId — the config's account reference must belong
+          // to the caller before any balance is touched.
+          const account = await Account.findOne({
+            where: { id: savingsConfig.targetAccountId, userId }
+          });
           if (account) {
             const balance = parseFloat(account.balance.toString());
-            await account.update({ balance: balance + amount });
+            await account.update({ balance: Math.round((balance + amount) * 100) / 100 });
             return { allocated: amount, accountId: account.id };
           }
         }
@@ -241,10 +311,14 @@ class AutomationController {
         return { notificationId: notification.id };
       }
       case 'create_transaction': {
+        const amount = Number(actionParams.amount);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          throw Object.assign(new Error('Automation amount must be a positive number'), { statusCode: 400 });
+        }
         const expense = await Expense.create({
           userId,
           description: actionParams.description || 'Automated expense',
-          amount: actionParams.amount,
+          amount,
           category: actionParams.category || 'Other',
           date: new Date(),
           note: actionParams.note
@@ -252,7 +326,9 @@ class AutomationController {
         return { expenseId: expense.id };
       }
       case 'mark_paid': {
-        const bill = await Bill.findByPk(actionParams.billId);
+        // Scoped by userId — a user-supplied billId must never mark
+        // another user's bill as paid.
+        const bill = await Bill.findOne({ where: { id: actionParams.billId, userId } });
         if (bill) {
           await bill.update({ isPaid: true, paidDate: new Date() });
           return { billId: bill.id };

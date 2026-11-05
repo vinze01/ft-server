@@ -79,6 +79,13 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    // Same minimum as registration — a reset must not weaken the password
+    // policy that signup enforces.
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters' });
+      return;
+    }
+
     // The stored value is a SHA-256 hash of the token that was emailed out
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
@@ -103,8 +110,11 @@ export const resetPassword = async (req: Request, res: Response): Promise<void> 
 
     await user.update({
       password: hashedPassword,
-      resetToken: undefined,
-      resetTokenExpiry: undefined
+      // null (not undefined) — Sequelize strips undefined keys, which would
+      // leave the token valid and replayable until its 1-hour expiry.
+      // (cast needed: sequelize 6 TS types don't model nullable updates)
+      resetToken: null as any,
+      resetTokenExpiry: null as any
     });
 
     res.json({ message: 'Password reset successfully' });

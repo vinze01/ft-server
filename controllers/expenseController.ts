@@ -8,9 +8,27 @@ export const addExpense = async (req: Request, res: Response): Promise<void> => 
     const { description, amount, category, date, accountId, note } = req.body as ExpenseInput;
     const userId = (req as any).userId;
 
+    if (!description || !String(description).trim()) {
+      res.status(400).json({ error: 'Description is required' });
+      return;
+    }
+    const amountNum = Number(amount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      res.status(400).json({ error: 'Amount must be a positive number' });
+      return;
+    }
+    if (!category || !String(category).trim()) {
+      res.status(400).json({ error: 'Category is required' });
+      return;
+    }
+    if (!date || isNaN(new Date(date).getTime())) {
+      res.status(400).json({ error: 'A valid date is required' });
+      return;
+    }
+
     const expense = await Expense.create({
       description,
-      amount,
+      amount: amountNum,
       category,
       date,
       userId,
@@ -28,14 +46,20 @@ export const addExpense = async (req: Request, res: Response): Promise<void> => 
 export const getExpenses = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = (req as any).userId;
-    const { month, category } = req.query;
+    const { month, category, search } = req.query;
 
     const where: any = { userId };
 
     if (month) {
+      // Validate YYYY-MM before building Date ranges — a malformed month
+      // previously produced NaN dates and nonsense results.
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month as string)) {
+        res.status(400).json({ error: 'Month must be in YYYY-MM format' });
+        return;
+      }
       const [year, mon] = (month as string).split('-').map(Number);
       const startOfMonth = new Date(year, mon - 1, 1);
-      const endOfMonth = new Date(year, mon, 0);
+      const endOfMonth = new Date(year, mon, 0, 23, 59, 59);
       where.date = { [Op.between]: [startOfMonth, endOfMonth] };
     }
 
@@ -43,9 +67,18 @@ export const getExpenses = async (req: Request, res: Response): Promise<void> =>
       where.category = category;
     }
 
-    const expenses = await Expense.findAll({ 
+    // Case-insensitive search over description (and note when present).
+    if (search && String(search).trim()) {
+      const term = String(search).trim();
+      where[Op.or] = [
+        { description: { [Op.iLike]: `%${term}%` } },
+        { note: { [Op.iLike]: `%${term}%` } }
+      ];
+    }
+
+    const expenses = await Expense.findAll({
       where,
-      order: [['date', 'DESC']]
+      order: [['date', 'DESC'], ['id', 'DESC']]
     });
 
     res.json(expenses);
@@ -103,11 +136,20 @@ export const updateExpense = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    if (amount !== undefined && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+      res.status(400).json({ error: 'Amount must be a positive number' });
+      return;
+    }
+    if (date !== undefined && isNaN(new Date(date).getTime())) {
+      res.status(400).json({ error: 'Invalid date' });
+      return;
+    }
+
     await expense.update({
-      description,
-      amount,
-      category,
-      date,
+      description: description !== undefined && description !== null ? description : expense.description,
+      amount: amount !== undefined && amount !== null ? Number(amount) : expense.amount,
+      category: category !== undefined && category !== null ? category : expense.category,
+      date: date !== undefined && date !== null ? date : expense.date,
       // Only overwrite the optional detail fields when actually sent, so a
       // partial PUT (e.g. { amount }) doesn't wipe them to null.
       ...(accountId !== undefined && { accountId: accountId || null }),

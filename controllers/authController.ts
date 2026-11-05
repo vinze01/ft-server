@@ -19,6 +19,29 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Please enter a valid email address' });
+      return;
+    }
+
+    if (typeof password !== 'string' || password.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters' });
+      return;
+    }
+
+    if (!/^\d+$/.test(String(contactNo))) {
+      res.status(400).json({ error: 'Contact number must contain digits only' });
+      return;
+    }
+
+    // The DB enforces unique usernames only; check email explicitly so the
+    // "email already exists" message is truthful.
+    const existingEmail = await User.findOne({ where: { email } });
+    if (existingEmail) {
+      res.status(400).json({ error: 'Email already exists' });
+      return;
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     
     const user = await User.create({
@@ -45,7 +68,7 @@ export const register = async (req: Request, res: Response): Promise<void> => {
 
 export const login = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { username, password } = req.body;
+    const { username, password, totpCode } = req.body;
 
     if (!username || !password) {
       res.status(400).json({ error: 'Please enter username and password' });
@@ -53,9 +76,20 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     }
 
     const user = await User.findOne({ where: { username } });
-    
+
     if (!user || !(await bcrypt.compare(password, user.password))) {
       res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Enforce the TOTP challenge for users who completed 2FA setup.
+    const twofa = await securityController.verifyLogin2FA(user, totpCode);
+    if (twofa === 'required') {
+      res.status(401).json({ error: '2FA code required', requires2FA: true });
+      return;
+    }
+    if (twofa === 'invalid') {
+      res.status(401).json({ error: 'Invalid 2FA code', requires2FA: true });
       return;
     }
 

@@ -1,5 +1,12 @@
 import { Request, Response } from 'express';
 import User from '../models/User';
+import {
+  Tag, TransactionTag, Income, Expense, SavingsAllocation, SavingsConfig,
+  AccountTransfer, Budget, RecurringTransaction, Bill, Goal,
+  AutomationRule, Notification, NotificationSettings, Insight, Session, Account
+} from '../models';
+import sequelize from '../config/database';
+import { Op } from 'sequelize';
 import bcrypt from 'bcryptjs';
 import { v2 as cloudinary } from 'cloudinary';
 import dotenv from 'dotenv';
@@ -131,7 +138,58 @@ export const deleteAccount = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    await user.destroy();
+    // Delete child rows explicitly inside one transaction. Databases created
+    // by sequelize.sync lack ON DELETE CASCADE on their FKs (the models don't
+    // declare it), so a bare user.destroy() would fail with FK violations.
+    await sequelize.transaction(async (t) => {
+      // Join rows reference tags and (polymorphically) transactions — clean
+      // them before either side disappears.
+      const tags = await Tag.findAll({ where: { userId }, attributes: ['id'], transaction: t });
+      const tagIds = tags.map(tag => tag.id);
+      const [incomeIds, expenseIds] = await Promise.all([
+        Income.findAll({ where: { userId }, attributes: ['id'], transaction: t }).then(rows => rows.map(r => r.id)),
+        Expense.findAll({ where: { userId }, attributes: ['id'], transaction: t }).then(rows => rows.map(r => r.id))
+      ]);
+      await TransactionTag.destroy({
+        where: {
+          ...(tagIds.length > 0 || incomeIds.length > 0 || expenseIds.length > 0
+            ? {
+                [Op.or]: [
+                  ...(tagIds.length > 0 ? [{ tagId: tagIds }] : []),
+                  ...(incomeIds.length > 0 ? [{ transactionId: incomeIds, transactionType: 'income' }] : []),
+                  ...(expenseIds.length > 0 ? [{ transactionId: expenseIds, transactionType: 'expense' }] : [])
+                ]
+              }
+            : {}),
+          ...(tagIds.length === 0 && incomeIds.length === 0 && expenseIds.length === 0 ? { id: -1 } : {})
+        },
+        transaction: t
+      });
+
+      // Allocations reference savings configs and goals — clean before both.
+      await SavingsAllocation.destroy({ where: { userId }, transaction: t });
+      await SavingsConfig.destroy({ where: { userId }, transaction: t });
+
+      // Transfers reference accounts — clean before accounts.
+      await AccountTransfer.destroy({ where: { userId }, transaction: t });
+
+      // Simple user-owned tables.
+      await Income.destroy({ where: { userId }, transaction: t });
+      await Expense.destroy({ where: { userId }, transaction: t });
+      await Budget.destroy({ where: { userId }, transaction: t });
+      await RecurringTransaction.destroy({ where: { userId }, transaction: t });
+      await Bill.destroy({ where: { userId }, transaction: t });
+      await Goal.destroy({ where: { userId }, transaction: t });
+      await AutomationRule.destroy({ where: { userId }, transaction: t });
+      await Notification.destroy({ where: { userId }, transaction: t });
+      await NotificationSettings.destroy({ where: { userId }, transaction: t });
+      await Insight.destroy({ where: { userId }, transaction: t });
+      await Session.destroy({ where: { userId }, transaction: t });
+      await Account.destroy({ where: { userId }, transaction: t });
+      await Tag.destroy({ where: { userId }, transaction: t });
+
+      await user.destroy({ transaction: t });
+    });
 
     res.json({ message: 'Account deleted successfully' });
   } catch (error) {
